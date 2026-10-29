@@ -176,10 +176,24 @@ const CONFIG = {
   // Fallback pars (used only if the sheet has no PAR row)
   pars:  [3,4,4,4,5,5,3,4,3,  3,4,5,4,3,5,4,4,4],
   yards: [151,366,354,401,572,480,160,315,208,  114,344,454,389,130,573,338,336,328],
-  // Flights: set after Round 1. Players are placed by Round 1 gross score.
-  // maxR1 = highest Round 1 score allowed in that flight. Leave [] until cutoffs are known.
-  // A "Flight" column in the sheet overrides these for any individual player.
-  flights: []
+  // Flights are placed by Saturday (Round 1) gross score, within each division.
+  // division: "" = men's field, "Senior", "Ladies" (matches the sheet's Division column).
+  // maxR1 = highest Saturday score allowed in that flight. The last flight in each division
+  // takes everyone left over, so its maxR1 doesn't matter.
+  // Flights stay hidden until flightsReady is true (set it once cutoffs are filled in).
+  // A "Flight" column in the sheet overrides the placement for any individual player.
+  flightsReady: false,
+  flights: [
+    { name:"Championship",        short:"Champ",      division:"",       maxR1:null },
+    { name:"A",                   short:"A",          division:"",       maxR1:null },
+    { name:"B",                   short:"B",          division:"",       maxR1:null },
+    { name:"C",                   short:"C",          division:"",       maxR1:null },
+    { name:"D",                   short:"D",          division:"",       maxR1:null },
+    { name:"Senior Championship", short:"Sr Champ",   division:"Senior", maxR1:null },
+    { name:"Senior A",            short:"Sr A",       division:"Senior", maxR1:null },
+    { name:"Ladies Championship", short:"Lad Champ",  division:"Ladies", maxR1:null },
+    { name:"Ladies A",            short:"Lad A",      division:"Ladies", maxR1:null }
+  ]
 };
 
 /* ===================================================================== */
@@ -235,7 +249,7 @@ function demoRows(){
 /* ---------- Build model ---------- */
 function build(rows){
   const hdr=rows[0].map(s=>s.trim().toLowerCase());
-  const iP=hdr.indexOf("player"), iR=hdr.indexOf("round"), iF=hdr.indexOf("flight");
+  const iP=hdr.indexOf("player"), iR=hdr.indexOf("round"), iF=hdr.indexOf("flight"), iD=hdr.indexOf("division");
   const iH=[]; for(let h=1;h<=18;h++) iH.push(hdr.indexOf(String(h)));
   let pars=CONFIG.pars.slice();
   const map=new Map();
@@ -244,10 +258,12 @@ function build(rows){
     const vals=iH.map(i=>{ const v=parseInt((r[i]||"").trim(),10); return isNaN(v)?null:v; });
     if(name.toUpperCase()==="PAR"){ pars=vals.map((v,i)=>v??pars[i]); continue; }
     const rd=parseInt(r[iR],10)||1;
-    if(!map.has(name)) map.set(name,{name, fo:"", rounds:{}});
+    if(!map.has(name)) map.set(name,{name, fo:"", div:"", rounds:{}});
     const pl=map.get(name);
     if(iF>=0 && (r[iF]||"").trim()) pl.fo=r[iF].trim();
+    if(iD>=0 && (r[iD]||"").trim()) pl.div=normDiv(r[iD]);
     pl.rounds[rd]=vals;
+    if(iH.some(i=>(r[i]||"").trim().toUpperCase()==="WD")) pl.wd=true;
   }
   const players=[...map.values()];
   const R=CONFIG.rounds;
@@ -267,7 +283,7 @@ function build(rows){
       p.toPar+=tp; p.holes+=n; p.strokes+=st;
     }
     p.today=p.r[cur];
-    p.flight = p.fo || flightFor(p);
+    p.flight = p.fo ? ((CONFIG.flights.find(x=>x.name.toLowerCase()===p.fo.toLowerCase())||{}).name||p.fo) : flightFor(p);
   }
 
   // hole averages per group (whole field "ALL" + each flight) per round
@@ -289,11 +305,13 @@ function build(rows){
   return {players, pars, cur, avg, cnt, R};
 }
 function flightFor(p){
-  const f=CONFIG.flights; if(!f.length) return "";
+  if(!CONFIG.flightsReady) return "";
+  const f=CONFIG.flights.filter(x=>x.division===p.div); if(!f.length) return "";
   const r1=p.r[1]; if(r1.thru<18) return "";
-  for(const x of f) if(r1.strokes<=x.maxR1) return x.name;
+  for(let i=0;i<f.length-1;i++) if(f[i].maxR1!=null && r1.strokes<=f[i].maxR1) return f[i].name;
   return f[f.length-1].name;
 }
+function normDiv(v){ v=(v||"").trim().toLowerCase(); return v.startsWith("sen")?"Senior": (v.startsWith("lad")||v.startsWith("wom"))?"Ladies":""; }
 
 /* ---------- Helpers ---------- */
 const dayShort=r=>(CONFIG.roundNames[r-1]||"RD "+r).slice(0,3).toUpperCase();
@@ -322,7 +340,7 @@ function render(){
   const d=state.d; if(!d) return;
   if(!state.flightPicked){ const f=flightNames(); state.flight=f.length?f[0]:"All"; }  // open on the top flight once flights are set
   // header status
-  const allDone = d.cur===d.R && d.players.every(p=>p.r[d.R].thru===18 || p.holes===0);
+  const allDone = d.cur===d.R && d.players.every(p=>p.r[d.R].thru===18 || p.holes===0 || p.wd);
   const anyLive = d.players.some(p=>p.today.thru>0 && p.today.thru<18);
   $("#live").className="live"+(allDone||!anyLive?" final":"");
   $("#liveTxt").textContent= allDone? "FINAL" : anyLive? "LIVE · "+dayShort(d.cur) : dayShort(d.cur)+" FINAL";
@@ -332,7 +350,7 @@ function render(){
   const fl=flightNames();
   let chips="";
   if(state.tab==="lb"||state.tab==="sg"){
-    if(fl.length){ chips=[...fl,"All"].map(f=>`<button class="chip ${state.flight===f?"on":""}" data-flight="${esc(f)}">${f==="All"?"Overall":esc(f)}</button>`).join(""); }
+    if(fl.length){ chips=[...fl,"All"].map(f=>`<button class="chip ${state.flight===f?"on":""}" data-flight="${esc(f)}">${f==="All"?"Overall":esc(abbr(f))}</button>`).join(""); }
     else chips=`<button class="chip on">Overall</button><span class="chip" style="opacity:.6;font-weight:500">Flights set after Saturday</span>`;
   }
   if(state.tab==="sg"||state.tab==="course"){
@@ -351,8 +369,8 @@ function render(){
 
 function renderLB(){
   const d=state.d; const q=state.q.toLowerCase();
-  const ps=filtered().slice().sort((a,b)=> (b.holes>0)-(a.holes>0) || a.toPar-b.toPar || b.holes-a.holes || a.name.localeCompare(b.name));
-  const started=ps.filter(p=>p.holes>0);
+  const ps=filtered().slice().sort((a,b)=> (!!a.wd)-(!!b.wd) || (b.holes>0)-(a.holes>0) || a.toPar-b.toPar || b.holes-a.holes || a.name.localeCompare(b.name));
+  const started=ps.filter(p=>p.holes>0 && !p.wd);
   const pos=rank(started,p=>p.toPar);
   const shown=ps.filter(p=>!q||p.name.toLowerCase().includes(q));
   if(!shown.length) return `<div class="empty">No players found.</div>`;
@@ -366,11 +384,11 @@ function renderLB(){
 }
 function rowHTML(p,pos,ctx){
   const d=state.d, t=p.today, key=ctx+"|"+p.name, open=state.open.has(key);
-  const thru= t.thru===18?"F": t.thru===0? (p.holes? "—":"—") : t.thru;
+  const thru= p.wd? "WD" : t.thru===18?"F": t.thru===0? "—" : t.thru;
   const showTag = state.flight==="All" && p.flight;
   let h=`<div class="row ${open?"open":""}" data-key="${esc(key)}">
-    <div class="pos">${p.holes?pos.get(p)||"":"—"}</div>
-    <div class="pname"><button class="star ${state.favs.has(p.name)?"on":""}" data-fav="${esc(p.name)}" aria-label="Favorite">★</button><span class="pn"><span class="nm">${esc(p.name)}</span>${showTag?`<span class="ftag">${esc(p.flight.toUpperCase())}</span>`:""}</span></div>
+    <div class="pos">${p.wd?"WD":p.holes?pos.get(p)||"":"—"}</div>
+    <div class="pname"><button class="star ${state.favs.has(p.name)?"on":""}" data-fav="${esc(p.name)}" aria-label="Favorite">★</button><span class="pn"><span class="nm">${esc(p.name)}</span>${showTag?`<span class="ftag">${esc(abbr(p.flight).toUpperCase())}</span>`:""}</span></div>
     <div class="num ${p.toPar<0?"u":""}">${p.holes?fmtPar(p.toPar):"—"}</div>
     <div class="thru">${thru}</div>
     <div class="today ${t.toPar<0?"u":""}">${t.thru?fmtPar(t.toPar):"—"}</div>
@@ -378,7 +396,7 @@ function rowHTML(p,pos,ctx){
   if(open) h+=cardHTML(p,key);
   return h;
 }
-function abbr(f){ const w=f.split(/\s+/); return w.length>1? w.map(x=>x[0]).join("").toUpperCase() : f.length>6? f.slice(0,5).toUpperCase(): f.toUpperCase(); }
+function abbr(f){ const c=CONFIG.flights.find(x=>x.name.toLowerCase()===f.toLowerCase()); return c&&c.short? c.short : f; }
 
 function cardHTML(p,key){
   const d=state.d;
@@ -429,7 +447,7 @@ function renderSG(){
   <div class="sect"><span>SG: Total</span><span>${state.sgRound==="all"?"Both days":(CONFIG.roundNames[state.sgRound-1]||"Round "+state.sgRound)}</span></div>
   <div class="sgh"><span>POS</span><span>PLAYER</span><span>TOTAL</span><span>PAR 3</span><span>PAR 4</span><span>PAR 5</span></div>`;
   html+=shown.map(x=>`<div class="sgr"><div class="pos">${pos.get(x)}</div>
-    <div style="min-width:0"><div class="nm">${esc(x.p.name)}</div><div class="bar"><i style="width:${Math.abs(x.sg)/max*100}%;background:${x.sg>=0?"var(--sgpos)":"var(--sgneg)"}"></i></div><div class="sub">${x.n} holes${state.flight==="All"&&x.p.flight?" · "+esc(x.p.flight):""}</div></div>
+    <div style="min-width:0"><div class="nm">${esc(x.p.name)}</div><div class="bar"><i style="width:${Math.abs(x.sg)/max*100}%;background:${x.sg>=0?"var(--sgpos)":"var(--sgneg)"}"></i></div><div class="sub">${x.n} holes${state.flight==="All"&&x.p.flight?" · "+esc(abbr(x.p.flight)):""}</div></div>
     <div class="sgtot"><span class="pill ${x.sg>=0?"p":"n"}">${fmtSG(x.sg)}</span></div>
     ${cell(x.t[3])}${cell(x.t[4])}${cell(x.t[5])}</div>`).join("");
   return html || `<div class="empty">No scores yet.</div>`;
