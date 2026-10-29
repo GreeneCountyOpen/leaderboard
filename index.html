@@ -170,7 +170,7 @@ const CONFIG = {
   roundNames: ["Saturday","Sunday"],
   // Google Sheet → File → Share → Publish to web → (Scores tab) → CSV → copy link here.
   // Leave blank to show demo data.
-  sheetCsvUrl: "",
+  sheetCsvUrl: "https://docs.google.com/spreadsheets/d/e/2PACX-1vSYmkDz0Iq3RYsHnsbLyAem77_d66PBhyvuPGyB4okOrgwV39YlVuCQWl7AWTbYTyuR42XXz3Gp4p-R/pub?gid=1264024970&single=true&output=csv",
   refreshSeconds: 60,
   rounds: 2,
   // Fallback pars (used only if the sheet has no PAR row)
@@ -333,7 +333,7 @@ function render(){
   let chips="";
   if(state.tab==="lb"||state.tab==="sg"){
     if(fl.length){ chips=[...fl,"All"].map(f=>`<button class="chip ${state.flight===f?"on":""}" data-flight="${esc(f)}">${f==="All"?"Overall":esc(f)}</button>`).join(""); }
-    else chips=`<button class="chip on">Overall</button><span class="chip" style="opacity:.6;font-weight:500">Flights set after Round 1</span>`;
+    else chips=`<button class="chip on">Overall</button><span class="chip" style="opacity:.6;font-weight:500">Flights set after Saturday</span>`;
   }
   if(state.tab==="sg"||state.tab==="course"){
     const k=state.tab==="sg"?"sgRound":"courseRound";
@@ -360,7 +360,7 @@ function renderLB(){
   const head=`<div class="lbh"><span>POS</span><span>PLAYER</span><span>TOT</span><span>THRU</span><span>${dayShort(d.cur)}</span></div>`;
   let html="";
   if(favs.length && !q) html+=`<div class="sect"><span>★ My Players</span></div><div class="lb">${head}${favs.map(p=>rowHTML(p,pos,"f")).join("")}</div>`;
-  html+=`<div class="sect"><span>${state.flight==="All"?"Overall":esc(state.flight)+" Flight"}</span><span>${started.length} players</span></div><div class="lb">${head}`;
+  html+=`<div class="sect"><span>${state.flight==="All"?"Overall":esc(state.flight)+" Flight"}</span><span>${started.length} player${started.length===1?"":"s"}</span></div><div class="lb">${head}`;
   html+=shown.map(p=>rowHTML(p,pos,"m")).join("");
   return html+"</div>";
 }
@@ -386,7 +386,7 @@ function cardHTML(p,key){
   const tabs=Array.from({length:d.R},(_,i)=>i+1).filter(x=>x<=d.cur).map(x=>`<button class="${x==r?"on":""}" data-cr="${x}" data-key="${esc(key)}">${CONFIG.roundNames[x-1]||"Round "+x}</button>`).join("");
   const sc=p.rounds[r], st=p.r[r];
   const nine=(a,b,label)=>{
-    let hole="",par="",yds="",sco="",sg=""; let ps=0,ys=0,ss=0,sgs=0,any=false;
+    let hole="",par="",yds="",sco="",sg=""; let ps=0,ys=0,ss=0,sgs=0,sgc=0,any=false;
     for(let h=a;h<b;h++){
       const v=sc[h], pr=d.pars[h]; ps+=pr;
       hole+=`<td>${h+1}</td>`; par+=`<td>${pr}</td>`; const y=CONFIG.yards[h]||0; ys+=y; yds+=`<td class="yd">${y||""}</td>`;
@@ -394,13 +394,13 @@ function cardHTML(p,key){
       any=true; ss+=v; const df=v-pr;
       const cls= df<=-2?"e": df===-1?"b": df===1?"bo": df>=2?"db":"";
       sco+=`<td><span class="s ${cls}">${v}</span></td>`;
-      if(d.cnt[p.base][r][h]>=2){ const g=d.avg[p.base][r][h]-v; sgs+=g; sg+=`<td class="sg ${g>=0?"pos-sg":"neg-sg"}">${(g>0?"+":"")+g.toFixed(1)}</td>`; } else sg+=`<td></td>`;
+      if(d.cnt[p.base][r][h]>=2){ const g=d.avg[p.base][r][h]-v; sgs+=g; sgc++; sg+=`<td class="sg ${g>=0?"pos-sg":"neg-sg"}">${(g>0?"+":"")+g.toFixed(1)}</td>`; } else sg+=`<td></td>`;
     }
     return `<table class="sc"><tr class="hole"><td>HOLE</td>${hole}<td class="tot">${label}</td></tr>
       <tr><td>YDS</td>${yds}<td class="tot yd">${ys||""}</td></tr>
       <tr><td>PAR</td>${par}<td class="tot">${ps}</td></tr>
       <tr><td>SCORE</td>${sco}<td class="tot">${any?ss:"—"}</td></tr>
-      <tr><td>SG</td>${sg}<td class="tot sg ${sgs>=0?"pos-sg":"neg-sg"}">${any?(sgs>0?"+":"")+sgs.toFixed(1):""}</td></tr></table>`;
+      <tr><td>SG</td>${sg}<td class="tot sg ${sgs>=0?"pos-sg":"neg-sg"}">${sgc?(sgs>0?"+":"")+sgs.toFixed(1):""}</td></tr></table>`;
   };
   const c=st.cats;
   return `<div class="card"><div class="rtabs">${tabs}</div>${nine(0,9,"OUT")}${nine(9,18,"IN")}
@@ -481,9 +481,10 @@ async function load(){
     } else {
       const res=await fetch(CONFIG.sheetCsvUrl+(CONFIG.sheetCsvUrl.includes("?")?"&":"?")+"t="+Date.now());
       rows=parseCSV(await res.text());
+      if(!rows.length || !rows[0].some(c=>c.trim().toLowerCase()==="player")) throw new Error("Sheet needs a 'Player' header in row 1");
     }
     state.d=build(rows); render();
-  }catch(err){ console.error(err); if(!state.d) $("#main").innerHTML=`<div class="empty">Couldn't load scores. Pull to refresh.</div>`; }
+  }catch(err){ console.error(err); if(!state.d) $("#main").innerHTML=`<div class="empty">Couldn't load scores. ${esc(err.message||"")}<br>Pull down to refresh.</div>`; }
 }
 $("#title").textContent=CONFIG.title; $("#subtitle").textContent=CONFIG.subtitle; document.title=CONFIG.title;
 load();
