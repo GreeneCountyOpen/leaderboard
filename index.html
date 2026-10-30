@@ -41,6 +41,8 @@ header{background:linear-gradient(180deg,var(--navy) 0%,var(--navy2) 100%);color
 .live.final i{display:none}
 @keyframes pulse{50%{opacity:.25}}
 .upd{margin-top:5px;opacity:.65}
+.yearsel{margin-top:6px;font:inherit;font-size:12px;font-weight:700;color:#fff;background:#ffffff1f;border:1px solid #ffffff40;border-radius:6px;padding:3px 22px 3px 8px;appearance:none;-webkit-appearance:none;background-image:linear-gradient(45deg,transparent 50%,#fff 50%),linear-gradient(135deg,#fff 50%,transparent 50%);background-position:calc(100% - 11px) 50%,calc(100% - 7px) 50%;background-size:4px 4px;background-repeat:no-repeat;cursor:pointer}
+.yearsel option{color:#000}
 nav.tabs{display:flex;margin-top:14px}
 nav.tabs button{flex:1;padding:11px 0 12px;font-size:13.5px;font-weight:600;color:#ffffffa8;border-bottom:3px solid transparent}
 nav.tabs button.on{color:#fff;border-bottom-color:var(--accent)}
@@ -71,6 +73,8 @@ nav.tabs button.on{color:#fff;border-bottom-color:var(--accent)}
 .pname{display:flex;align-items:center;gap:8px;min-width:0}
 .pn{display:flex;flex-direction:column;min-width:0;gap:2px}
 .pn .ftag{align-self:flex-start;font-size:9.5px;padding:1px 5px}
+.ftag.po{background:#d4a74a33;color:#8a6414}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .ftag.po{color:#f0cd7c}}
 .star{font-size:17px;line-height:1;color:var(--line);padding:4px 2px;flex:none}
 .star.on{color:var(--gold)}
 .nm{font-weight:600;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -144,7 +148,7 @@ footer{padding:24px 16px 40px;text-align:center;font-size:11.5px;color:var(--mut
     <div class="toprow">
       <div class="logo">GCO</div>
       <div class="ttl"><h1 id="title">Greene County Open</h1><p id="subtitle"></p></div>
-      <div class="status"><span class="live" id="live"><i></i><span id="liveTxt">LIVE</span></span><div class="upd" id="upd"></div></div>
+      <div class="status"><span class="live" id="live"><i></i><span id="liveTxt">LIVE</span></span><div class="upd" id="upd"></div><select id="year" class="yearsel" aria-label="Year"></select></div>
     </div>
     <nav class="tabs" id="tabs">
       <button data-tab="lb" class="on">Leaderboard</button>
@@ -166,11 +170,14 @@ footer{padding:24px 16px 40px;text-align:center;font-size:11.5px;color:var(--mut
    ===================================================================== */
 const CONFIG = {
   title: "Greene County Open",
-  subtitle: "July 2027 · Phil Harris Golf Course",
+  course: "Phil Harris Golf Course",
   roundNames: ["Saturday","Sunday"],
-  // Google Sheet → File → Share → Publish to web → (Scores tab) → CSV → copy link here.
-  // Leave blank to show demo data.
-  sheetCsvUrl: "https://docs.google.com/spreadsheets/d/e/2PACX-1vSYmkDz0Iq3RYsHnsbLyAem77_d66PBhyvuPGyB4okOrgwV39YlVuCQWl7AWTbYTyuR42XXz3Gp4p-R/pub?gid=1264024970&single=true&output=csv",
+  // One entry per year, newest last. Each year is its own tab in the Google Sheet,
+  // published as CSV (File → Share → Publish to web → pick that tab → CSV).
+  // The newest year with a link opens by default and refreshes live; older years are archives.
+  years: [
+    { year: 2026, dates: "July 2026", url: "https://docs.google.com/spreadsheets/d/e/2PACX-1vSYmkDz0Iq3RYsHnsbLyAem77_d66PBhyvuPGyB4okOrgwV39YlVuCQWl7AWTbYTyuR42XXz3Gp4p-R/pub?gid=1264024970&single=true&output=csv" },
+  ],
   refreshSeconds: 60,
   rounds: 2,
   // Fallback pars (used only if the sheet has no PAR row)
@@ -197,9 +204,11 @@ const CONFIG = {
 };
 
 /* ===================================================================== */
-const DEMO = !CONFIG.sheetCsvUrl;
+const YEARS = CONFIG.years.filter(y=>y.url);
+const DEMO = !YEARS.length;
+const latestYear = YEARS.length? YEARS[YEARS.length-1].year : null;
 const $ = s => document.querySelector(s);
-const state = { tab:"lb", flight:null, sgRound:"all", courseRound:"all", open:new Set(), cardRound:{}, q:"", favs:loadFavs(), d:null };
+const state = { year:(()=>{ const q=+new URLSearchParams(location.search).get("year"); return YEARS.some(y=>y.year===q)? q : latestYear; })(), tab:"lb", flight:null, sgRound:"all", courseRound:"all", open:new Set(), cardRound:{}, q:"", favs:loadFavs(), d:null };
 
 function loadFavs(){ try{ return new Set(JSON.parse(localStorage.getItem("gco_favs")||"[]")); }catch(e){ return new Set(); } }
 function saveFavs(){ try{ localStorage.setItem("gco_favs", JSON.stringify([...state.favs])); }catch(e){} }
@@ -249,7 +258,7 @@ function demoRows(){
 /* ---------- Build model ---------- */
 function build(rows){
   const hdr=rows[0].map(s=>s.trim().toLowerCase());
-  const iP=hdr.indexOf("player"), iR=hdr.indexOf("round"), iF=hdr.indexOf("flight"), iD=hdr.indexOf("division");
+  const iP=hdr.indexOf("player"), iR=hdr.indexOf("round"), iF=hdr.indexOf("flight"), iD=hdr.indexOf("division"), iX=hdr.indexOf("finish");
   const iH=[]; for(let h=1;h<=18;h++) iH.push(hdr.indexOf(String(h)));
   let pars=CONFIG.pars.slice();
   const map=new Map();
@@ -262,6 +271,7 @@ function build(rows){
     const pl=map.get(name);
     if(iF>=0 && (r[iF]||"").trim()) pl.fo=r[iF].trim();
     if(iD>=0 && (r[iD]||"").trim()) pl.div=normDiv(r[iD]);
+    if(iX>=0 && parseInt(r[iX],10)>0) pl.finish=parseInt(r[iX],10);  // playoff / tiebreak finish within the flight
     pl.rounds[rd]=vals;
     if(iH.some(i=>(r[i]||"").trim().toUpperCase()==="WD")) pl.wd=true;
   }
@@ -343,8 +353,10 @@ function render(){
   const allDone = d.cur===d.R && d.players.every(p=>p.r[d.R].thru===18 || p.holes===0 || p.wd);
   const anyLive = d.players.some(p=>p.today.thru>0 && p.today.thru<18);
   $("#live").className="live"+(allDone||!anyLive?" final":"");
-  $("#liveTxt").textContent= allDone? "FINAL" : anyLive? "LIVE · "+dayShort(d.cur) : dayShort(d.cur)+" FINAL";
-  $("#upd").textContent= "Updated "+new Date().toLocaleTimeString([], {hour:"numeric",minute:"2-digit"});
+  const archive = !DEMO && state.year!==latestYear;
+  if(archive) $("#live").className="live final";
+  $("#liveTxt").textContent= archive||allDone? "FINAL" : anyLive? "LIVE · "+dayShort(d.cur) : dayShort(d.cur)+" FINAL";
+  $("#upd").textContent= archive? "Final results" : "Updated "+new Date().toLocaleTimeString([], {hour:"numeric",minute:"2-digit"});
 
   // chips
   const fl=flightNames();
@@ -369,9 +381,22 @@ function render(){
 
 function renderLB(){
   const d=state.d; const q=state.q.toLowerCase();
-  const ps=filtered().slice().sort((a,b)=> (!!a.wd)-(!!b.wd) || (b.holes>0)-(a.holes>0) || a.toPar-b.toPar || b.holes-a.holes || a.name.localeCompare(b.name));
+  const ps=filtered().slice().sort((a,b)=> (!!a.wd)-(!!b.wd) || (b.holes>0)-(a.holes>0) || a.toPar-b.toPar || (b.finish===1)-(a.finish===1) || b.holes-a.holes || a.name.localeCompare(b.name));
   const started=ps.filter(p=>p.holes>0 && !p.wd);
   const pos=rank(started,p=>p.toPar);
+  // Playoffs decide first place only: when players tie for the lead and one has Finish = 1,
+  // that player is 1st and the others in the playoff are 2nd (T2 if more than one). Other ties stay ties.
+  const po=new Map();
+  if(state.flight!=="All" && started.length>1){
+    let j=0; while(j+1<started.length && started[j+1].toPar===started[0].toPar) j++;
+    const grp=started.slice(0,j+1), win=grp.find(p=>p.finish===1);
+    if(grp.length>1 && win){
+      const rest=grp.filter(p=>p!==win);
+      pos.set(win,"1"); po.set(win,"Won playoff");
+      rest.forEach(p=>{ pos.set(p, rest.length>1?"T2":"2"); po.set(p,"Lost playoff"); });
+    }
+  }
+  state._po=po;
   const shown=ps.filter(p=>!q||p.name.toLowerCase().includes(q));
   if(!shown.length) return `<div class="empty">No players found.</div>`;
   const favs=shown.filter(p=>state.favs.has(p.name));
@@ -388,7 +413,7 @@ function rowHTML(p,pos,ctx){
   const showTag = state.flight==="All" && p.flight;
   let h=`<div class="row ${open?"open":""}" data-key="${esc(key)}">
     <div class="pos">${p.wd?"WD":p.holes?pos.get(p)||"":"—"}</div>
-    <div class="pname"><button class="star ${state.favs.has(p.name)?"on":""}" data-fav="${esc(p.name)}" aria-label="Favorite">★</button><span class="pn"><span class="nm">${esc(p.name)}</span>${showTag?`<span class="ftag">${esc(abbr(p.flight).toUpperCase())}</span>`:""}</span></div>
+    <div class="pname"><button class="star ${state.favs.has(p.name)?"on":""}" data-fav="${esc(p.name)}" aria-label="Favorite">★</button><span class="pn"><span class="nm">${esc(p.name)}</span>${showTag?`<span class="ftag">${esc(abbr(p.flight).toUpperCase())}</span>`:""}${state._po&&state._po.get(p)?`<span class="ftag po">${state._po.get(p).toUpperCase()}</span>`:""}</span></div>
     <div class="num ${p.toPar<0?"u":""}">${p.holes?fmtPar(p.toPar):"—"}</div>
     <div class="thru">${thru}</div>
     <div class="today ${t.toPar<0?"u":""}">${t.thru?fmtPar(t.toPar):"—"}</div>
@@ -495,18 +520,32 @@ async function load(){
     let rows;
     if(DEMO){
       rows=demoRows();
-      if(!CONFIG.flights.length) CONFIG.flights=[{name:"Championship",maxR1:76},{name:"First",maxR1:81},{name:"Second",maxR1:86},{name:"Third",maxR1:999}];
     } else {
-      const res=await fetch(CONFIG.sheetCsvUrl+(CONFIG.sheetCsvUrl.includes("?")?"&":"?")+"t="+Date.now());
+      const y=YEARS.find(x=>x.year===state.year); const want=state.year;
+      const res=await fetch(y.url+(y.url.includes("?")?"&":"?")+"t="+Date.now());
       rows=parseCSV(await res.text());
       if(!rows.length || !rows[0].some(c=>c.trim().toLowerCase()==="player")) throw new Error("Sheet needs a 'Player' header in row 1");
+      if(want!==state.year) return;  // year was switched while loading
     }
     state.d=build(rows); render();
   }catch(err){ console.error(err); if(!state.d) $("#main").innerHTML=`<div class="empty">Couldn't load scores. ${esc(err.message||"")}<br>Pull down to refresh.</div>`; }
 }
-$("#title").textContent=CONFIG.title; $("#subtitle").textContent=CONFIG.subtitle; document.title=CONFIG.title;
-load();
-if(!DEMO) setInterval(load, CONFIG.refreshSeconds*1000);
+function setHeader(){
+  const y=CONFIG.years.find(x=>x.year===state.year);
+  $("#subtitle").textContent=(y?y.dates:"")+" · "+CONFIG.course;
+  const sel=$("#year");
+  sel.innerHTML=YEARS.slice().reverse().map(x=>`<option value="${x.year}" ${x.year===state.year?"selected":""}>${x.year}</option>`).join("");
+  sel.style.display= YEARS.length? "" : "none";
+}
+$("#year").addEventListener("change",e=>{
+  state.year=+e.target.value; state.d=null; state.open.clear(); state.cardRound={}; state.flightPicked=false;
+  try{ history.replaceState(null,"",state.year===latestYear? location.pathname : "?year="+state.year); }catch(err){}
+  setHeader(); $("#main").innerHTML=`<div class="empty">Loading ${state.year}…</div>`; load();
+});
+$("#title").textContent=CONFIG.title; document.title=CONFIG.title;
+setHeader(); load();
+// only the newest year refreshes live; past years are final
+if(!DEMO) setInterval(()=>{ if(state.year===latestYear) load(); }, CONFIG.refreshSeconds*1000);
 </script>
 </body>
 </html>
