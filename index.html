@@ -107,6 +107,8 @@ nav.tabs button.on{color:#fff;border-bottom-color:var(--accent)}
 .sg{font-size:10.5px;font-weight:700}
 .yd{font-size:10px;color:var(--muted)}
 .pos-sg{color:var(--sgpos)} .neg-sg{color:var(--sgneg)}
+.note{background:var(--card);border-radius:8px;padding:14px;font-size:13.5px;color:var(--muted);line-height:1.45;margin:0 0 4px}
+.note b{color:var(--text);font-size:15px}
 .stats{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-top:4px}
 .stat{background:var(--card);border-radius:8px;padding:8px 4px;text-align:center}
 .stat b{display:block;font-family:'Barlow Condensed',Inter,sans-serif;font-size:20px}
@@ -258,7 +260,7 @@ function demoRows(){
 /* ---------- Build model ---------- */
 function build(rows){
   const hdr=rows[0].map(s=>s.trim().toLowerCase());
-  const iP=hdr.indexOf("player"), iR=hdr.indexOf("round"), iF=hdr.indexOf("flight"), iD=hdr.indexOf("division"), iX=hdr.indexOf("finish");
+  const iP=hdr.indexOf("player"), iR=hdr.indexOf("round"), iF=hdr.indexOf("flight"), iD=hdr.indexOf("division"), iX=hdr.findIndex(h=>/^(finish|place|playoff|pos)/.test(h)), iS=hdr.findIndex(h=>h==="round score"||h==="round total");
   const iH=[]; for(let h=1;h<=18;h++) iH.push(hdr.indexOf(String(h)));
   let pars=CONFIG.pars.slice();
   const map=new Map();
@@ -271,8 +273,10 @@ function build(rows){
     const pl=map.get(name);
     if(iF>=0 && (r[iF]||"").trim()) pl.fo=r[iF].trim();
     if(iD>=0 && (r[iD]||"").trim()) pl.div=normDiv(r[iD]);
-    if(iX>=0 && parseInt(r[iX],10)>0) pl.finish=parseInt(r[iX],10);  // playoff / tiebreak finish within the flight
+    if(iX>=0){ const fx=parseInt(String(r[iX]||"").replace(/[^0-9]/g,""),10); if(fx>0) pl.finish=fx; }  // playoff / tiebreak finish within the flight
     pl.rounds[rd]=vals;
+    // a round with no hole scores can still carry its total (or NR = not recorded) in a "Round Score" column
+    if(iS>=0 && vals.every(v=>v==null)){ const rs=String(r[iS]||"").trim(); if(/^\d+$/.test(rs)) (pl.manual=pl.manual||{})[rd]=+rs; else if(/^n\/?r$/i.test(rs)) pl.nr=true; }
     if(iH.some(i=>(r[i]||"").trim().toUpperCase()==="WD")) pl.wd=true;
   }
   const players=[...map.values()];
@@ -280,7 +284,7 @@ function build(rows){
   for(const p of players){ for(let r=1;r<=R;r++) if(!p.rounds[r]) p.rounds[r]=Array(18).fill(null); }
 
   // current round = highest round with any score
-  let cur=1; for(const p of players) for(let r=1;r<=R;r++) if(p.rounds[r].some(v=>v!=null)) cur=Math.max(cur,r);
+  let cur=1; for(const p of players) for(let r=1;r<=R;r++) if(p.rounds[r].some(v=>v!=null) || (p.manual&&p.manual[r])) cur=Math.max(cur,r);
 
   // pass 1: scoring per player/round, then flights (flights need Round 1 totals)
   for(const p of players){
@@ -289,7 +293,8 @@ function build(rows){
       const sc=p.rounds[r]; let tp=0,st=0,n=0, cats={e:0,b:0,p:0,bo:0,db:0};
       sc.forEach((v,h)=>{ if(v==null) return; n++; st+=v; const d=v-pars[h]; tp+=d;
         if(d<=-2)cats.e++; else if(d===-1)cats.b++; else if(d===0)cats.p++; else if(d===1)cats.bo++; else cats.db++; });
-      p.r[r]={toPar:tp, strokes:st, thru:n, sg:0, sgN:0, sgT:{3:0,4:0,5:0}, cats};
+      if(n===0 && p.manual && p.manual[r]){ const ms=p.manual[r]; tp=ms-pars.reduce((a,b)=>a+b,0); st=ms; n=18; }
+      p.r[r]={toPar:tp, strokes:st, thru:n, sg:0, sgN:0, sgT:{3:0,4:0,5:0}, cats, manual:!!(p.manual&&p.manual[r]&&!sc.some(v=>v!=null))};
       p.toPar+=tp; p.holes+=n; p.strokes+=st;
     }
     p.today=p.r[cur];
@@ -350,7 +355,7 @@ function render(){
   const d=state.d; if(!d) return;
   if(!state.flightPicked){ const f=flightNames(); state.flight=f.length?f[0]:"All"; }  // open on the top flight once flights are set
   // header status
-  const allDone = d.cur===d.R && d.players.every(p=>p.r[d.R].thru===18 || p.holes===0 || p.wd);
+  const allDone = d.cur===d.R && d.players.every(p=>p.r[d.R].thru===18 || p.holes===0 || p.wd || p.nr);
   const anyLive = d.players.some(p=>p.today.thru>0 && p.today.thru<18);
   $("#live").className="live"+(allDone||!anyLive?" final":"");
   const archive = !DEMO && state.year!==latestYear;
@@ -381,8 +386,8 @@ function render(){
 
 function renderLB(){
   const d=state.d; const q=state.q.toLowerCase();
-  const ps=filtered().slice().sort((a,b)=> (!!a.wd)-(!!b.wd) || (b.holes>0)-(a.holes>0) || a.toPar-b.toPar || (b.finish===1)-(a.finish===1) || b.holes-a.holes || a.name.localeCompare(b.name));
-  const started=ps.filter(p=>p.holes>0 && !p.wd);
+  const ps=filtered().slice().sort((a,b)=> (!!(a.wd||a.nr))-(!!(b.wd||b.nr)) || (b.holes>0)-(a.holes>0) || a.toPar-b.toPar || (b.finish===1)-(a.finish===1) || b.holes-a.holes || a.name.localeCompare(b.name));
+  const started=ps.filter(p=>p.holes>0 && !p.wd && !p.nr);
   const pos=rank(started,p=>p.toPar);
   // Playoffs decide first place only: when players tie for the lead and one has Finish = 1,
   // that player is 1st and the others in the playoff are 2nd (T2 if more than one). Other ties stay ties.
@@ -409,11 +414,11 @@ function renderLB(){
 }
 function rowHTML(p,pos,ctx){
   const d=state.d, t=p.today, key=ctx+"|"+p.name, open=state.open.has(key);
-  const thru= p.wd? "WD" : t.thru===18?"F": t.thru===0? "—" : t.thru;
+  const thru= p.wd? "WD" : p.nr? "—" : t.thru===18?"F": t.thru===0? "—" : t.thru;
   const showTag = state.flight==="All" && p.flight;
   let h=`<div class="row ${open?"open":""}" data-key="${esc(key)}">
-    <div class="pos">${p.wd?"WD":p.holes?pos.get(p)||"":"—"}</div>
-    <div class="pname"><button class="star ${state.favs.has(p.name)?"on":""}" data-fav="${esc(p.name)}" aria-label="Favorite">★</button><span class="pn"><span class="nm">${esc(p.name)}</span>${showTag?`<span class="ftag">${esc(abbr(p.flight).toUpperCase())}</span>`:""}${state._po&&state._po.get(p)?`<span class="ftag po">${state._po.get(p).toUpperCase()}</span>`:""}</span></div>
+    <div class="pos">${p.wd?"WD":p.nr?"—":p.holes?pos.get(p)||"":"—"}</div>
+    <div class="pname"><button class="star ${state.favs.has(p.name)?"on":""}" data-fav="${esc(p.name)}" aria-label="Favorite">★</button><span class="pn"><span class="nm">${esc(p.name)}</span>${showTag?`<span class="ftag">${esc(abbr(p.flight).toUpperCase())}</span>`:""}${state._po&&state._po.get(p)?`<span class="ftag po">${state._po.get(p).toUpperCase()}</span>`:""}${p.nr?`<span class="ftag">${esc(nrLabel(p))}</span>`:""}</span></div>
     <div class="num ${p.toPar<0?"u":""}">${p.holes?fmtPar(p.toPar):"—"}</div>
     <div class="thru">${thru}</div>
     <div class="today ${t.toPar<0?"u":""}">${t.thru?fmtPar(t.toPar):"—"}</div>
@@ -421,6 +426,7 @@ function rowHTML(p,pos,ctx){
   if(open) h+=cardHTML(p,key);
   return h;
 }
+function nrLabel(p){ const d=state.d; for(let r=1;r<=d.R;r++) if(!p.r[r].thru) return ((CONFIG.roundNames[r-1]||"Round "+r)+" not recorded").toUpperCase(); return "NOT RECORDED"; }
 function abbr(f){ const c=CONFIG.flights.find(x=>x.name.toLowerCase()===f.toLowerCase()); return c&&c.short? c.short : f; }
 
 function cardHTML(p,key){
@@ -446,6 +452,9 @@ function cardHTML(p,key){
       <tr><td>SG</td>${sg}<td class="tot sg ${sgs>=0?"pos-sg":"neg-sg"}">${sgc?(sgs>0?"+":"")+sgs.toFixed(1):""}</td></tr></table>`;
   };
   const c=st.cats;
+  const dayName=CONFIG.roundNames[r-1]||"Round "+r;
+  if(st.manual) return `<div class="card"><div class="rtabs">${tabs}</div><div class="note">${dayName}: <b>${st.strokes}</b> (${fmtPar(st.toPar)}). Hole-by-hole scores weren't recorded for this round.</div></div>`;
+  if(!st.thru && p.nr) return `<div class="card"><div class="rtabs">${tabs}</div><div class="note">${dayName} score wasn't recorded.</div></div>`;
   return `<div class="card"><div class="rtabs">${tabs}</div>${nine(0,9,"OUT")}${nine(9,18,"IN")}
     <div class="stats">
       <div class="stat"><b>${st.thru?st.strokes:"—"}</b><span>Score</span></div>
