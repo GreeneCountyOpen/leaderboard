@@ -56,12 +56,13 @@ nav.tabs button.on{color:#fff;border-bottom-color:var(--accent)}
 /* Controls */
 .controls{background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:var(--hdr,128px);z-index:15}
 .chips{display:flex;flex-direction:column;gap:7px;padding:9px 0}
-.chiprow{display:flex;gap:6px;overflow-x:auto;padding:0 12px;scrollbar-width:none}
+.chiprow{display:flex;gap:5px;overflow-x:auto;padding:0 10px;scrollbar-width:none}
 .chiprow::-webkit-scrollbar{display:none}
-.chip{white-space:nowrap;flex:none;padding:6px 11px;border-radius:999px;background:var(--chip);font-size:12.5px;font-weight:600}
+.chip{white-space:nowrap;flex:none;padding:6px 10px;border-radius:999px;background:var(--chip);font-size:12.5px;font-weight:600}
 .chip.on{background:var(--navy);color:#fff}
+.chip.srch{display:inline-flex;align-items:center;gap:4px}
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .chip.on{background:#fff;color:var(--navy)}}
-.search{padding:0 16px 10px}
+.search{padding:0 12px 10px}
 .search input{width:100%;padding:9px 12px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit;font-size:14px}
 
 .demo{margin:10px 16px 0;padding:9px 12px;border-radius:8px;background:#fff6dd;color:#6a4e00;font-size:12.5px;line-height:1.4}
@@ -225,7 +226,7 @@ const YEARS = CONFIG.years.filter(y=>y.url);
 const DEMO = !YEARS.length;
 const latestYear = YEARS.length? YEARS[YEARS.length-1].year : null;
 const $ = s => document.querySelector(s);
-const state = { year:(()=>{ const q=+new URLSearchParams(location.search).get("year"); return YEARS.some(y=>y.year===q)? q : latestYear; })(), tab:"lb", flight:null, sgRound:"all", courseRound:"all", open:new Set(), cardRound:{}, q:"", favs:loadFavs(), d:null };
+const state = { year:(()=>{ const q=+new URLSearchParams(location.search).get("year"); return YEARS.some(y=>y.year===q)? q : latestYear; })(), tab:"lb", flight:null, sgRound:"all", courseRound:"all", open:new Set(), cardRound:{}, q:"", searchOpen:false, favs:loadFavs(), d:null };
 
 function loadFavs(){ try{ return new Set(JSON.parse(localStorage.getItem("gco_favs")||"[]")); }catch(e){ return new Set(); } }
 function saveFavs(){ try{ localStorage.setItem("gco_favs", JSON.stringify([...state.favs])); }catch(e){} }
@@ -388,11 +389,12 @@ function render(){
       // men's flights on the first row; senior, ladies and Overall on the second
       const div=f=>{ const c=CONFIG.flights.find(x=>x.name===f); return c?c.division:"other"; };
       const men=fl.filter(f=>div(f)===""), rest=fl.filter(f=>div(f)!=="");
+      // row 1: men's flights + Overall; row 2: senior and ladies flights + Search
       chips = men.length && rest.length
-        ? `<div class="chiprow">${men.map(chip).join("")}</div><div class="chiprow">${rest.map(chip).join("")}${chip("All")}</div>`
-        : `<div class="chiprow">${[...fl,"All"].map(chip).join("")}</div>`;
+        ? `<div class="chiprow">${men.map(chip).join("")}${chip("All")}</div><div class="chiprow">${rest.map(chip).join("")}${searchChip()}</div>`
+        : `<div class="chiprow">${[...fl,"All"].map(chip).join("")}${searchChip()}</div>`;
     }
-    else chips=`<div class="chiprow"><button class="chip on">Overall</button><span class="chip" style="opacity:.6;font-weight:500">Flights set after Saturday</span></div>`;
+    else chips=`<div class="chiprow"><button class="chip on">Overall</button><span class="chip" style="opacity:.6;font-weight:500">Flights set after Saturday</span>${searchChip()}</div>`;
   }
   if(state.tab==="sg"||state.tab==="course"){
     const k=state.tab==="sg"?"sgRound":"courseRound";
@@ -401,22 +403,23 @@ function render(){
       rs.map(r=>`<button class="chip ${state[k]===r?"on":""}" data-rnd="${r}" data-k="${k}">${r==="all"?"Both Days":(CONFIG.roundNames[r-1]||"Rd "+r)}</button>`).join("") + `</div>`;
   }
   $("#chips").innerHTML=chips;
-  $("#searchBox").style.display= state.tab==="course"?"none":"";
+  $("#searchBox").style.display= state.tab!=="course" && state.searchOpen ? "" : "none";
 
   $("#main").innerHTML = (DEMO?`<div class="demo"><b>Demo data.</b> Connect your Google Sheet in CONFIG to go live. Demo flights shown so you can preview the layout.</div>`:"") +
     (state.tab==="lb"?renderLB(): state.tab==="sg"?renderSG(): renderCourse());
   document.documentElement.style.setProperty("--hdr", $("#hdr").offsetHeight+"px");
 }
 
-function renderLB(){
-  const d=state.d; const q=state.q.toLowerCase();
-  const ps=filtered().slice().sort((a,b)=> (!!(a.wd||a.nr))-(!!(b.wd||b.nr)) || (b.holes>0)-(a.holes>0) || a.toPar-b.toPar || (b.finish===1)-(a.finish===1) || b.holes-a.holes || a.name.localeCompare(b.name));
+// leaderboard math for one view (a flight, or "All"): order, positions, playoff tags, movement
+function boardFor(f){
+  const d=state.d;
+  const ps=(f==="All"?d.players:d.players.filter(p=>p.flight===f)).slice().sort((a,b)=> (!!(a.wd||a.nr))-(!!(b.wd||b.nr)) || (b.holes>0)-(a.holes>0) || a.toPar-b.toPar || (b.finish===1)-(a.finish===1) || b.holes-a.holes || a.name.localeCompare(b.name));
   const started=ps.filter(p=>p.holes>0 && !p.wd && !p.nr);
   const pos=rank(started,p=>p.toPar);
   // Playoffs decide first place only: when players tie for the lead and one has Finish = 1,
   // that player is 1st and the others in the playoff are 2nd (T2 if more than one). Other ties stay ties.
   const po=new Map();
-  if(state.flight!=="All" && started.length>1){
+  if(f!=="All" && started.length>1){
     let j=0; while(j+1<started.length && started[j+1].toPar===started[0].toPar) j++;
     const grp=started.slice(0,j+1), win=grp.find(p=>p.finish===1);
     if(grp.length>1 && win){
@@ -425,7 +428,6 @@ function renderLB(){
       rest.forEach(p=>{ pos.set(p, rest.length>1?"T2":"2"); po.set(p,"Lost playoff"); });
     }
   }
-  state._po=po;
   // places moved since Saturday (within this view), once Sunday has started
   const mv=new Map();
   if(d.cur>=2){
@@ -434,25 +436,41 @@ function renderLB(){
     started.forEach(p=>{ if(!sp.has(p)||!pos.has(p)) return;
       const a=parseInt(sp.get(p).replace("T",""),10), b=parseInt(pos.get(p).replace("T",""),10); mv.set(p,a-b); });
   }
-  state._mv=mv;
-  const shown=ps.filter(p=>!q||p.name.toLowerCase().includes(q));
-  if(!shown.length) return `<div class="empty">No players found.</div>`;
-  const favs=shown.filter(p=>state.favs.has(p.name));
+  return {ps,started,pos,po,mv};
+}
+function renderLB(){
+  const d=state.d; const q=state.q.trim().toLowerCase();
   const fin=state._final;
   const head= fin
     ? `<div class="lbh"><span>POS</span><span>PLAYER</span>${Array.from({length:d.R},(_,i)=>`<span>${dayShort(i+1)}</span>`).join("")}<span>TOT</span></div>`
     : `<div class="lbh"><span>POS</span><span>PLAYER</span><span>TOT</span><span>THRU</span><span>${dayShort(d.cur)}</span></div>`;
   const lbc= fin? "lb fin" : "lb";
+  const section=(f,rows,b,right)=>{ state._po=b.po; state._mv=b.mv; state._view=f;
+    return `<div class="sect"><span>${f==="All"?"Overall":esc(f)+" Flight"}</span><span>${right}</span></div><div class="${lbc}">${head}${rows.map(p=>rowHTML(p,b.pos,"m")).join("")}</div>`; };
+
+  // searching looks across every flight, with each player's real position in their own flight
+  if(q){
+    const fl=flightNames(); let html="", n=0;
+    for(const f of (fl.length?fl:["All"])){
+      const b=boardFor(f), hits=b.ps.filter(p=>p.name.toLowerCase().includes(q));
+      if(hits.length){ n+=hits.length; html+=section(f,hits,b,`${hits.length} match${hits.length===1?"":"es"}`); }
+    }
+    return n? html : `<div class="empty">No players match “${esc(state.q.trim())}”.</div>`;
+  }
+
+  const b=boardFor(state.flight);
+  if(!b.ps.length) return `<div class="empty">No players found.</div>`;
   let html="";
-  if(favs.length && !q) html+=`<div class="sect"><span>★ My Players</span></div><div class="${lbc}">${head}${favs.map(p=>rowHTML(p,pos,"f")).join("")}</div>`;
-  html+=`<div class="sect"><span>${state.flight==="All"?"Overall":esc(state.flight)+" Flight"}</span><span>${started.length} player${started.length===1?"":"s"}</span></div><div class="${lbc}">${head}`;
-  html+=shown.map(p=>rowHTML(p,pos,"m")).join("");
-  return html+"</div>";
+  const favs=b.ps.filter(p=>state.favs.has(p.name));
+  if(favs.length){ state._po=b.po; state._mv=b.mv; state._view=state.flight;
+    html+=`<div class="sect"><span>★ My Players</span></div><div class="${lbc}">${head}${favs.map(p=>rowHTML(p,b.pos,"f")).join("")}</div>`; }
+  html+=section(state.flight,b.ps,b,`${b.started.length} player${b.started.length===1?"":"s"}`);
+  return html;
 }
 function rowHTML(p,pos,ctx){
   const d=state.d, t=p.today, key=ctx+"|"+p.name, open=state.open.has(key);
   const thru= p.wd? "WD" : p.nr? "—" : t.thru===18?"F": t.thru===0? "—" : t.thru;
-  const showTag = state.flight==="All" && p.flight;
+  const showTag = state._view==="All" && p.flight;
   let h=`<div class="row ${open?"open":""}" data-key="${esc(key)}">
     <div class="pos"><span>${p.wd?"WD":p.nr?"—":p.holes?pos.get(p)||"":"—"}</span>${mvHTML(p)}</div>
     <div class="pname"><button class="star ${state.favs.has(p.name)?"on":""}" data-fav="${esc(p.name)}" aria-label="Favorite">★</button><span class="pn"><span class="nm">${esc(p.name)}</span>${showTag?`<span class="ftag">${esc(abbr(p.flight).toUpperCase())}</span>`:""}${state._po&&state._po.get(p)?`<span class="ftag po">${state._po.get(p).toUpperCase()}</span>`:""}${p.nr?`<span class="ftag">${esc(nrLabel(p))}</span>`:""}</span></div>
@@ -463,6 +481,9 @@ function rowHTML(p,pos,ctx){
   if(open) h+=cardHTML(p,key);
   return h;
 }
+const ICON_SEARCH='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M20 20l-4.6-4.6"/></svg>';
+const ICON_X='<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+function searchChip(){ return `<button class="chip srch ${state.searchOpen?"on":""}" data-search="1">${state.searchOpen?ICON_X+"Close":ICON_SEARCH+"Search"}</button>`; }
 function mvHTML(p){ const m=state._mv&&state._mv.get(p); if(!m) return ""; return `<span class="mv ${m>0?"up":"dn"}">${m>0?"▲":"▼"}${Math.abs(m)}</span>`; }
 function roundCells(p){
   const d=state.d, pt=d.pars.reduce((a,b)=>a+b,0); let h="";
@@ -560,6 +581,7 @@ function renderCourse(){
 document.addEventListener("click",e=>{
   const t=e.target.closest("button,.row"); if(!t) return;
   if(t.dataset.tab){ state.tab=t.dataset.tab; document.querySelectorAll("#tabs button").forEach(b=>b.classList.toggle("on",b===t)); render(); window.scrollTo(0,0); return; }
+  if(t.dataset.search){ state.searchOpen=!state.searchOpen; if(!state.searchOpen){ state.q=""; $("#q").value=""; } render(); if(state.searchOpen) setTimeout(()=>$("#q").focus(),30); return; }
   if(t.dataset.flight){ state.flight=t.dataset.flight; state.flightPicked=true; render(); return; }
   if(t.dataset.rnd){ state[t.dataset.k]=t.dataset.rnd; render(); return; }
   if(t.dataset.fav!==undefined){ e.stopPropagation(); const n=t.dataset.fav; state.favs.has(n)?state.favs.delete(n):state.favs.add(n); saveFavs(); render(); return; }
